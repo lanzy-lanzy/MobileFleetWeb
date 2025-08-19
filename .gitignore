@@ -1,0 +1,83 @@
+# Django
+*.log
+*.pot
+*.pyc
+__pycache__/
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Firebase Service Account Key (IMPORTANT: Keep this secret!)
+mobile_fleet_services.json
+*serviceAccountKey.json
+*firebase-adminsdk*.json
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Media files (uploaded content)
+media/
+staticfiles/
+
+# Virtual environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Python
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Migrations (optional - uncomment if you want to ignore migrations)
+# */migrations/
+
+# Static files (collected)
+/static/
+/staticfiles/
+
+# Temporary files
+*.tmp
+*.temp

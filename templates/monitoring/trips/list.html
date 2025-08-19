@@ -1,0 +1,164 @@
+{% extends 'base.html' %}
+
+{% block title %}Trip Monitoring - Mobile Fleet Monitoring{% endblock %}
+{% block page_title %}Trip Monitoring{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="mb-8">
+    <div class="sm:flex sm:items-center sm:justify-between">
+        <div>
+            <h2 class="text-3xl font-bold text-gray-900">Trip Monitoring</h2>
+            <p class="mt-2 text-lg text-gray-600">Real-time tracking of fleet trips and activities</p>
+        </div>
+        <div class="mt-4 sm:mt-0 flex space-x-3">
+            <button class="inline-flex items-center px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                </svg>
+                Export
+            </button>
+            <a href="{% url 'trip_create' %}"
+               class="inline-flex items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                </svg>
+                Create Trip
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Filters and Auto-refresh -->
+<div class="mb-6 bg-white rounded-xl shadow-lg p-6">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
+        <!-- Filters -->
+        <div class="flex flex-wrap items-center space-x-4">
+            <div class="flex items-center space-x-2">
+                <label class="text-sm font-medium text-gray-700">Status:</label>
+                <select id="statusFilter"
+                        class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                        hx-get="{% url 'trip_list' %}"
+                        hx-target="#trip-list-container"
+                        hx-include="[name='driver']"
+                        name="status">
+                    <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All Trips</option>
+                    <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active</option>
+                    <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>Completed</option>
+                    <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>Cancelled</option>
+                </select>
+            </div>
+
+            <div class="flex items-center space-x-2">
+                <label class="text-sm font-medium text-gray-700">Driver:</label>
+                <select id="driverFilter"
+                        class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                        hx-get="{% url 'trip_list' %}"
+                        hx-target="#trip-list-container"
+                        hx-include="[name='status']"
+                        name="driver">
+                    <option value="">All Drivers</option>
+                    {% for driver in drivers %}
+                        <option value="{{ driver.driver_id }}" {% if driver_filter == driver.driver_id %}selected{% endif %}>
+                            {{ driver.name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <!-- Auto-refresh toggle -->
+        <div class="flex items-center space-x-4">
+            <div class="flex items-center">
+                <input type="checkbox" id="autoRefresh" class="rounded border-gray-300 text-purple-600 focus:ring-purple-500" checked>
+                <label for="autoRefresh" class="ml-2 text-sm text-gray-700">Auto-refresh (30s)</label>
+            </div>
+            <div class="flex items-center text-sm text-gray-500">
+                <svg class="w-4 h-4 mr-1 animate-pulse text-green-500" fill="currentColor" viewBox="0 0 8 8">
+                    <circle cx="4" cy="4" r="3"></circle>
+                </svg>
+                Live
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Trip List Container -->
+<div id="trip-list-container"
+     hx-get="{% url 'trip_list' %}?status={{ status_filter }}&driver={{ driver_filter }}"
+     hx-trigger="every 30s[document.getElementById('autoRefresh').checked]"
+     hx-swap="innerHTML">
+
+    <!-- Trip Cards Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+        {% if trips %}
+            {% for trip in trips %}
+                {% include 'monitoring/trips/trip_card.html' with trip=trip %}
+            {% endfor %}
+        {% else %}
+            <!-- Empty State -->
+            <div class="col-span-full">
+                <div class="text-center py-12 bg-white rounded-xl shadow-lg">
+                    <div class="mx-auto h-24 w-24 text-gray-400 mb-4">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" class="w-full h-full">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-medium text-gray-900 mb-2">No trips found</h3>
+                    <p class="text-gray-500 mb-6">No trips match your current filters.</p>
+                    <a href="{% url 'trip_create' %}"
+                       class="inline-flex items-center px-6 py-3 border border-transparent shadow-sm text-base font-medium rounded-lg text-white bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                        </svg>
+                        Create First Trip
+                    </a>
+                </div>
+            </div>
+        {% endif %}
+    </div>
+
+    <!-- Pagination -->
+    {% if page_obj.has_other_pages %}
+        <div class="mt-8 flex items-center justify-between">
+            <div class="flex-1 flex justify-between sm:hidden">
+                {% if page_obj.has_previous %}
+                    <a href="?page={{ page_obj.previous_page_number }}&status={{ status_filter }}&driver={{ driver_filter }}"
+                       class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                        Previous
+                    </a>
+                {% endif %}
+                {% if page_obj.has_next %}
+                    <a href="?page={{ page_obj.next_page_number }}&status={{ status_filter }}&driver={{ driver_filter }}"
+                       class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                        Next
+                    </a>
+                {% endif %}
+            </div>
+            <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-sm text-gray-700">
+                        Showing page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
+                    </p>
+                </div>
+                <div>
+                    <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                        {% if page_obj.has_previous %}
+                            <a href="?page={{ page_obj.previous_page_number }}&status={{ status_filter }}&driver={{ driver_filter }}"
+                               class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                                Previous
+                            </a>
+                        {% endif %}
+                        {% if page_obj.has_next %}
+                            <a href="?page={{ page_obj.next_page_number }}&status={{ status_filter }}&driver={{ driver_filter }}"
+                               class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                                Next
+                            </a>
+                        {% endif %}
+                    </nav>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
