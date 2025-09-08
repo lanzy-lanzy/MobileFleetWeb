@@ -4,6 +4,7 @@ from django.core.paginator import Paginator
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django.conf import settings
 import json
 from .firebase_service import firebase_service
 from .utils import generate_and_upload_qr, get_qr_code_base64
@@ -20,18 +21,52 @@ def home(request):
         active_trips = firebase_service.get_active_trips()
         completed_trips = firebase_service.get_completed_trips()
 
+        # Get recent trips and resolve terminal names
+        recent_trips = firebase_service.get_all_trips(limit=10)
+
+        # Create a mapping of terminal IDs to names for quick lookup
+        terminal_map = {terminal.get('terminal_id', terminal.get('id')): terminal.get('name', 'Unknown Terminal')
+                       for terminal in terminals}
+
+        # Resolve terminal names in recent trips
+        for trip in recent_trips:
+            start_terminal_id = trip.get('start_terminal')
+            destination_terminal_id = trip.get('destination_terminal')
+
+            # Add resolved terminal names to trip data
+            trip['start_terminal_name'] = terminal_map.get(start_terminal_id, start_terminal_id or 'Unknown')
+            trip['destination_terminal_name'] = terminal_map.get(destination_terminal_id, destination_terminal_id or 'Unknown')
+
         context = {
             'total_terminals': len(terminals),
             'total_drivers': len(drivers),
             'active_trips': len(active_trips),
             'completed_trips': len(completed_trips),
-            'recent_trips': firebase_service.get_all_trips(limit=10),
+            'recent_trips': recent_trips,
+            'firebase_project_id': settings.FIREBASE_PROJECT_ID,
         }
         return render(request, 'monitoring/dashboard.html', context)
     except Exception as e:
         logger.error(f"Error loading dashboard: {e}")
         messages.error(request, "Error loading dashboard data")
         return render(request, 'monitoring/dashboard.html', {'error': str(e)})
+
+
+def firebase_config(request):
+    """Provide Firebase configuration for frontend"""
+    # For the actual Firebase web config, you would get these values from Firebase Console
+    # Go to Project Settings > General > Your apps > Web app > Config
+    # For now, using the project ID we have and placeholder values
+    config = {
+        'apiKey': 'AIzaSyBvOoM5xgOJYhZlXQZ8fJ9X2nY3kL4mP6Q',  # Replace with actual API key from Firebase Console
+        'authDomain': f'{settings.FIREBASE_PROJECT_ID}.firebaseapp.com',
+        'projectId': settings.FIREBASE_PROJECT_ID,
+        'storageBucket': f'{settings.FIREBASE_PROJECT_ID}.appspot.com',
+        'messagingSenderId': '123456789012',  # Replace with actual sender ID from Firebase Console
+        'appId': '1:123456789012:web:abcdef123456789012345678'  # Replace with actual app ID from Firebase Console
+    }
+    return JsonResponse(config)
+
 
 # Terminal Management Views
 def terminal_list(request):
@@ -339,8 +374,26 @@ def trip_list(request):
         if driver_filter:
             trips = [trip for trip in trips if trip.get('driver_id') == driver_filter]
 
-        # Get all drivers for filter dropdown
+        # Get all drivers and terminals for filter dropdown and name resolution
         drivers = firebase_service.get_all_drivers()
+        terminals = firebase_service.get_all_terminals()
+
+        # Create mappings for quick lookup
+        terminal_map = {terminal.get('terminal_id', terminal.get('id')): terminal.get('name', 'Unknown Terminal')
+                       for terminal in terminals}
+        driver_map = {driver.get('driver_id', driver.get('id')): driver.get('name', 'Unknown Driver')
+                     for driver in drivers}
+
+        # Resolve terminal and driver names in trips
+        for trip in trips:
+            start_terminal_id = trip.get('start_terminal')
+            destination_terminal_id = trip.get('destination_terminal')
+            driver_id = trip.get('driver_id')
+
+            # Add resolved names to trip data
+            trip['start_terminal_name'] = terminal_map.get(start_terminal_id, start_terminal_id or 'Unknown')
+            trip['destination_terminal_name'] = terminal_map.get(destination_terminal_id, destination_terminal_id or 'Unknown')
+            trip['driver_name'] = driver_map.get(driver_id, driver_id or 'Unknown')
 
         # Pagination
         paginator = Paginator(trips, 15)

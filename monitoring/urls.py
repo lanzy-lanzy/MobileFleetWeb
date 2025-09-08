@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     # Dashboard
     path('', views.home, name='home'),
+    path('firebase-config/', views.firebase_config, name='firebase_config'),
 
     # Terminal Management
     path('terminals/', views.terminal_list, name='terminal_list'),

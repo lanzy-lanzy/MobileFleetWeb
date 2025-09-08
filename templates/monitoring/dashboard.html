@@ -3,6 +3,12 @@
 {% block title %}Dashboard - Mobile Fleet Monitoring{% endblock %}
 {% block page_title %}Fleet Dashboard{% endblock %}
 
+{% block extra_head %}
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+{% endblock %}
+
 {% block content %}
 <!-- Page Header -->
 <div class="mb-8">
@@ -12,7 +18,7 @@
             <p class="mt-2 text-lg text-gray-600">Here's what's happening with your fleet today</p>
         </div>
         <div class="mt-4 sm:mt-0">
-            <span class="text-sm text-gray-500">Last updated: {{ "now"|date:"M d, Y H:i" }}</span>
+            <span class="text-sm text-gray-500" data-last-updated>Last updated: {{ "now"|date:"M d, Y H:i" }}</span>
         </div>
     </div>
 </div>
@@ -76,7 +82,7 @@
                 </div>
                 <div class="ml-4 flex-1">
                     <div class="flex items-baseline">
-                        <p class="text-3xl font-bold text-gray-900">{{ active_trips|default:0 }}</p>
+                        <p class="text-3xl font-bold text-gray-900" data-stat="active-trips">{{ active_trips|default:0 }}</p>
                         <p class="ml-2 text-sm font-medium text-yellow-600">Live</p>
                     </div>
                     <p class="text-sm font-medium text-gray-500">Active Trips</p>
@@ -98,7 +104,7 @@
                 </div>
                 <div class="ml-4 flex-1">
                     <div class="flex items-baseline">
-                        <p class="text-3xl font-bold text-gray-900">{{ completed_trips|default:0 }}</p>
+                        <p class="text-3xl font-bold text-gray-900" data-stat="completed-trips">{{ completed_trips|default:0 }}</p>
                         <p class="ml-2 text-sm font-medium text-green-600">Today</p>
                     </div>
                     <p class="text-sm font-medium text-gray-500">Completed Trips</p>
@@ -123,7 +129,7 @@
                 </div>
             </div>
 
-            <div class="divide-y divide-gray-200">
+            <div class="divide-y divide-gray-200" id="recent-trips-container">
                 {% if recent_trips %}
                     {% for trip in recent_trips %}
                         <div class="px-6 py-4 hover:bg-gray-50 transition-colors">
@@ -151,7 +157,7 @@
                                     </div>
                                     <div>
                                         <p class="text-sm font-semibold text-gray-900">Trip #{{ trip.trip_id|slice:":8" }}</p>
-                                        <p class="text-sm text-gray-600">{{ trip.start_terminal }} → {{ trip.destination_terminal }}</p>
+                                        <p class="text-sm text-gray-600">{{ trip.start_terminal_name|default:trip.start_terminal }} → {{ trip.destination_terminal_name|default:trip.destination_terminal }}</p>
                                         <p class="text-xs text-gray-500">{{ trip.created_at|date:"M d, H:i" }}</p>
                                     </div>
                                 </div>
@@ -265,4 +271,394 @@
         </div>
     </div>
 </div>
+
+<!-- Real-time Status Indicator -->
+<div id="realtime-status" class="fixed bottom-4 right-4 z-50">
+    <div class="bg-white rounded-lg shadow-lg p-3 border-l-4 border-yellow-500">
+        <div class="flex items-center">
+            <div class="flex-shrink-0">
+                <div id="status-indicator" class="w-3 h-3 bg-yellow-500 rounded-full animate-pulse"></div>
+            </div>
+            <div class="ml-3">
+                <p class="text-sm font-medium text-gray-900">Real-time Sync</p>
+                <p id="status-text" class="text-xs text-gray-500">Connecting...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Debug Panel (only visible in development) -->
+{% if debug %}
+<div id="debug-panel" class="fixed bottom-4 left-4 z-50 bg-gray-800 text-white p-4 rounded-lg shadow-lg max-w-sm">
+    <h4 class="text-sm font-bold mb-2">Firebase Debug</h4>
+    <div id="debug-info" class="text-xs space-y-1">
+        <div>Status: <span id="debug-status">Initializing...</span></div>
+        <div>Project: <span id="debug-project">{{ firebase_project_id }}</span></div>
+        <div>Trips: <span id="debug-trips">0</span></div>
+        <div>Last Update: <span id="debug-last-update">Never</span></div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// Firebase Configuration - Load from server
+let firebaseConfig = null;
+let db = null;
+
+// Load Firebase configuration from server
+fetch('{% url "firebase_config" %}')
+    .then(response => response.json())
+    .then(config => {
+        firebaseConfig = config;
+        console.log('Firebase config loaded:', config);
+
+        try {
+            // Initialize Firebase
+            firebase.initializeApp(firebaseConfig);
+            db = firebase.firestore();
+
+            // Test connection
+            console.log('Testing Firebase connection...');
+
+            // Setup real-time listeners after Firebase is initialized
+            setupRealtimeListeners();
+        } catch (error) {
+            console.error('Error initializing Firebase:', error);
+            updateConnectionStatus(false);
+
+            // Show user-friendly message
+            showNotification('Firebase Connection Error', 'Unable to connect to Firebase. Please check configuration.', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error loading Firebase config:', error);
+        updateConnectionStatus(false);
+        showNotification('Configuration Error', 'Unable to load Firebase configuration.', 'error');
+    });
+
+// Real-time data containers
+let activeTripsData = [];
+let completedTripsData = [];
+let recentTripsData = [];
+let terminalsData = [];
+let terminalMap = {};
+
+// Status indicator elements
+const statusIndicator = document.getElementById('status-indicator');
+const statusText = document.getElementById('status-text');
+
+// Update connection status
+function updateConnectionStatus(connected) {
+    if (connected) {
+        statusIndicator.className = 'w-3 h-3 bg-green-500 rounded-full animate-pulse';
+        statusText.textContent = 'Connected';
+        updateDebugStatus('Connected');
+    } else {
+        statusIndicator.className = 'w-3 h-3 bg-red-500 rounded-full';
+        statusText.textContent = 'Disconnected';
+        updateDebugStatus('Disconnected');
+    }
+}
+
+// Update debug panel
+function updateDebugStatus(status) {
+    const debugStatus = document.getElementById('debug-status');
+    const debugLastUpdate = document.getElementById('debug-last-update');
+    const debugTrips = document.getElementById('debug-trips');
+
+    if (debugStatus) debugStatus.textContent = status;
+    if (debugLastUpdate) debugLastUpdate.textContent = new Date().toLocaleTimeString();
+    if (debugTrips) debugTrips.textContent = recentTripsData.length;
+}
+
+// Format timestamp for display
+function formatTimestamp(timestamp) {
+    if (!timestamp) return 'N/A';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+// Load terminals and create mapping
+function loadTerminals() {
+    if (!db) {
+        console.error('Firebase not initialized yet');
+        return;
+    }
+
+    console.log('Loading terminals for name resolution...');
+
+    db.collection('terminals').onSnapshot((snapshot) => {
+        console.log('Terminals updated:', snapshot.size, 'terminals');
+        terminalsData = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+
+        // Create terminal mapping for quick lookup
+        terminalMap = {};
+        terminalsData.forEach(terminal => {
+            const terminalId = terminal.terminal_id || terminal.id;
+            terminalMap[terminalId] = terminal.name || 'Unknown Terminal';
+        });
+
+        console.log('Terminal mapping created:', terminalMap);
+
+        // Refresh recent trips display with updated terminal names
+        updateRecentTripsDisplay();
+    }, (error) => {
+        console.error('Error loading terminals:', error);
+    });
+}
+
+// Resolve terminal name from ID
+function getTerminalName(terminalId) {
+    return terminalMap[terminalId] || terminalId || 'Unknown';
+}
+
+// Update statistics cards
+function updateStatistics() {
+    // Update total counts
+    document.querySelector('[data-stat="active-trips"]').textContent = activeTripsData.length;
+    document.querySelector('[data-stat="completed-trips"]').textContent = completedTripsData.length;
+
+    // Update last updated time
+    const lastUpdated = document.querySelector('[data-last-updated]');
+    if (lastUpdated) {
+        const now = new Date();
+        lastUpdated.textContent = `Last updated: ${now.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        })}`;
+    }
+}
+
+// Update recent trips display
+function updateRecentTripsDisplay() {
+    const container = document.getElementById('recent-trips-container');
+    if (!container) return;
+
+    if (recentTripsData.length === 0) {
+        container.innerHTML = `
+            <div class="text-center py-12">
+                <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                </svg>
+                <h3 class="mt-2 text-sm font-medium text-gray-900">No trips yet</h3>
+                <p class="mt-1 text-sm text-gray-500">Get started by creating your first trip.</p>
+            </div>
+        `;
+        return;
+    }
+
+    const tripsHtml = recentTripsData.map(trip => {
+        const statusClass = trip.status === 'completed' ? 'bg-green-100 text-green-600' :
+                           trip.status === 'in_progress' ? 'bg-yellow-100 text-yellow-600' :
+                           'bg-red-100 text-red-600';
+
+        const statusBadgeClass = trip.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                trip.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :
+                                'bg-red-100 text-red-800';
+
+        const statusIcon = trip.status === 'completed' ?
+            '<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>' :
+            trip.status === 'in_progress' ?
+            '<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>' :
+            '<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>';
+
+        return `
+            <div class="px-6 py-4 hover:bg-gray-50 transition-colors" data-trip-id="${trip.id}">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-4">
+                        <div class="flex-shrink-0">
+                            <div class="w-10 h-10 rounded-full flex items-center justify-center ${statusClass}">
+                                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                    ${statusIcon}
+                                </svg>
+                            </div>
+                        </div>
+                        <div>
+                            <p class="text-sm font-semibold text-gray-900">Trip #${(trip.trip_id || trip.id).substring(0, 8)}</p>
+                            <p class="text-sm text-gray-600">${getTerminalName(trip.start_terminal)} → ${getTerminalName(trip.destination_terminal)}</p>
+                            <p class="text-xs text-gray-500">${formatTimestamp(trip.created_at)}</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusBadgeClass}">
+                            ${trip.status ? trip.status.charAt(0).toUpperCase() + trip.status.slice(1).replace('_', ' ') : 'Unknown'}
+                        </span>
+                        <p class="text-sm text-gray-900 mt-1">${trip.passengers || 0} passengers</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    container.innerHTML = tripsHtml;
+}
+
+// Set up real-time listeners
+function setupRealtimeListeners() {
+    if (!db) {
+        console.error('Firebase not initialized yet');
+        return;
+    }
+
+    console.log('Setting up Firebase real-time listeners...');
+
+    // Load terminals first for name resolution
+    loadTerminals();
+
+    // Listen to all trips for recent trips display
+    const allTripsQuery = db.collection('trips')
+        .orderBy('created_at', 'desc')
+        .limit(10);
+
+    allTripsQuery.onSnapshot((snapshot) => {
+        console.log('Recent trips updated:', snapshot.size, 'trips');
+        recentTripsData = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+        updateRecentTripsDisplay();
+        updateConnectionStatus(true);
+    }, (error) => {
+        console.error('Error listening to recent trips:', error);
+        updateConnectionStatus(false);
+    });
+
+    // Listen to active trips
+    const activeTripsQuery = db.collection('trips')
+        .where('status', '==', 'in_progress');
+
+    activeTripsQuery.onSnapshot((snapshot) => {
+        console.log('Active trips updated:', snapshot.size, 'active trips');
+        activeTripsData = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+        updateStatistics();
+        updateConnectionStatus(true);
+    }, (error) => {
+        console.error('Error listening to active trips:', error);
+        updateConnectionStatus(false);
+    });
+
+    // Listen to completed trips
+    const completedTripsQuery = db.collection('trips')
+        .where('status', '==', 'completed');
+
+    completedTripsQuery.onSnapshot((snapshot) => {
+        console.log('Completed trips updated:', snapshot.size, 'completed trips');
+        completedTripsData = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+        updateStatistics();
+        updateConnectionStatus(true);
+    }, (error) => {
+        console.error('Error listening to completed trips:', error);
+        updateConnectionStatus(false);
+    });
+
+    // Listen for real-time changes with detailed logging
+    db.collection('trips').onSnapshot((snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+            const tripData = change.doc.data();
+            if (change.type === 'added') {
+                console.log('🆕 New trip started:', {
+                    id: change.doc.id,
+                    status: tripData.status,
+                    passengers: tripData.passengers,
+                    start_terminal: tripData.start_terminal,
+                    destination_terminal: tripData.destination_terminal
+                });
+
+                // Show notification for new trips
+                showNotification('New Trip Started', `Trip from ${getTerminalName(tripData.start_terminal)} to ${getTerminalName(tripData.destination_terminal)}`, 'success');
+            }
+            if (change.type === 'modified') {
+                console.log('📝 Trip updated:', {
+                    id: change.doc.id,
+                    status: tripData.status,
+                    passengers: tripData.passengers
+                });
+
+                // Show notification for passenger count changes
+                if (change.doc.data().passengers !== undefined) {
+                    showNotification('Trip Updated', `Passenger count: ${tripData.passengers}`, 'info');
+                }
+            }
+            if (change.type === 'removed') {
+                console.log('🗑️ Trip removed:', change.doc.id);
+            }
+        });
+    });
+}
+
+// Show notification function
+function showNotification(title, message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `fixed top-4 right-4 z-50 max-w-sm w-full bg-white shadow-lg rounded-lg pointer-events-auto ring-1 ring-black ring-opacity-5 overflow-hidden transform transition-all duration-300 translate-x-full`;
+
+    const bgColor = type === 'success' ? 'bg-green-50 border-green-200' :
+                   type === 'error' ? 'bg-red-50 border-red-200' :
+                   'bg-blue-50 border-blue-200';
+
+    const iconColor = type === 'success' ? 'text-green-400' :
+                     type === 'error' ? 'text-red-400' :
+                     'text-blue-400';
+
+    notification.innerHTML = `
+        <div class="p-4 ${bgColor}">
+            <div class="flex">
+                <div class="flex-shrink-0">
+                    <svg class="h-5 w-5 ${iconColor}" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                    </svg>
+                </div>
+                <div class="ml-3">
+                    <p class="text-sm font-medium text-gray-900">${title}</p>
+                    <p class="text-sm text-gray-500">${message}</p>
+                </div>
+                <div class="ml-auto pl-3">
+                    <button onclick="this.parentElement.parentElement.parentElement.remove()" class="text-gray-400 hover:text-gray-600">
+                        <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(notification);
+
+    // Animate in
+    setTimeout(() => {
+        notification.classList.remove('translate-x-full');
+    }, 100);
+
+    // Auto remove after 5 seconds
+    setTimeout(() => {
+        notification.classList.add('translate-x-full');
+        setTimeout(() => notification.remove(), 300);
+    }, 5000);
+}
+
+// Initialize when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Dashboard loaded, waiting for Firebase initialization...');
+    // Firebase initialization and listener setup is handled in the fetch callback above
+});
+</script>
 {% endblock %}
