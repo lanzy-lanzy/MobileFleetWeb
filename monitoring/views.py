@@ -1,5 +1,8 @@
 from django.shortcuts import render, redirect
 from django.contrib import messages
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth.models import User
 from django.core.paginator import Paginator
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -12,6 +15,32 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def login_view(request):
+    """User login view"""
+    if request.user.is_authenticated:
+        return redirect('home')
+    
+    if request.method == 'POST':
+        username = request.POST.get('username')
+        password = request.POST.get('password')
+        
+        user = authenticate(request, username=username, password=password)
+        if user is not None:
+            login(request, user)
+            messages.success(request, f"Welcome back, {user.first_name or user.username}!")
+            return redirect('home')
+        else:
+            messages.error(request, "Invalid username or password.")
+    
+    return render(request, 'monitoring/login.html')
+
+def logout_view(request):
+    """User logout view"""
+    logout(request)
+    messages.success(request, "You have been logged out successfully.")
+    return redirect('login')
+
+@login_required(login_url='login')
 def home(request):
     """Dashboard home page"""
     try:
@@ -52,6 +81,7 @@ def home(request):
         return render(request, 'monitoring/dashboard.html', {'error': str(e)})
 
 
+@login_required(login_url='login')
 def firebase_config(request):
     """Provide Firebase configuration for frontend"""
     # For the actual Firebase web config, you would get these values from Firebase Console
@@ -69,6 +99,7 @@ def firebase_config(request):
 
 
 # Terminal Management Views
+@login_required(login_url='login')
 def terminal_list(request):
     """List all terminals"""
     try:
@@ -89,6 +120,7 @@ def terminal_list(request):
         messages.error(request, "Error loading terminals")
         return render(request, 'monitoring/terminals/list.html', {'terminals': []})
 
+@login_required(login_url='login')
 def terminal_create(request):
     """Create a new terminal"""
     if request.method == 'POST':
@@ -128,6 +160,7 @@ def terminal_create(request):
 
     return render(request, 'monitoring/terminals/create.html')
 
+@login_required(login_url='login')
 def terminal_detail(request, terminal_id):
     """View terminal details"""
     try:
@@ -151,6 +184,7 @@ def terminal_detail(request, terminal_id):
         messages.error(request, "Error loading terminal details")
         return redirect('terminal_list')
 
+@login_required(login_url='login')
 def terminal_edit(request, terminal_id):
     """Edit terminal"""
     try:
@@ -194,6 +228,7 @@ def terminal_edit(request, terminal_id):
         messages.error(request, "Error editing terminal")
         return redirect('terminal_list')
 
+@login_required(login_url='login')
 def terminal_delete(request, terminal_id):
     """Delete terminal"""
     if request.method == 'POST':
@@ -214,6 +249,7 @@ def terminal_delete(request, terminal_id):
     return redirect('terminal_list')
 
 # Driver Management Views
+@login_required(login_url='login')
 def driver_list(request):
     """List all drivers"""
     try:
@@ -234,40 +270,79 @@ def driver_list(request):
         messages.error(request, "Error loading drivers")
         return render(request, 'monitoring/drivers/list.html', {'drivers': []})
 
+@login_required(login_url='login')
 def driver_create(request):
-    """Create a new driver"""
+    """Create a new driver with Firebase Auth and Django User"""
     if request.method == 'POST':
         try:
             name = request.POST.get('name')
+            email = request.POST.get('email')
+            password = request.POST.get('password')
             contact = request.POST.get('contact')
             license_number = request.POST.get('license_number')
 
-            if not name:
-                messages.error(request, "Driver name is required")
+            # Validate required fields
+            if not name or not email or not password:
+                messages.error(request, "Name, email, and password are required")
                 return render(request, 'monitoring/drivers/create.html')
 
-            # Create driver data
+            # Check if user already exists
+            if User.objects.filter(email=email).exists():
+                messages.error(request, f"A user with email '{email}' already exists")
+                return render(request, 'monitoring/drivers/create.html')
+
+            # Create Django User Account first (required for mobile app login)
+            try:
+                user = User.objects.create_user(
+                    username=email,
+                    email=email,
+                    password=password,
+                    first_name=name.split()[0] if name else '',
+                    last_name=' '.join(name.split()[1:]) if len(name.split()) > 1 else ''
+                )
+                logger.info(f"Created Django user account for {email}")
+            except Exception as e:
+                logger.error(f"Error creating Django user: {e}")
+                messages.error(request, f"Failed to create user account: {str(e)}")
+                return render(request, 'monitoring/drivers/create.html')
+
+            # Create Firebase Auth user
+            auth_uid = firebase_service.create_auth_user(email, password, name)
+            
+            if not auth_uid:
+                # Delete the Django user if Firebase creation fails
+                user.delete()
+                messages.error(request, "Failed to create Firebase authentication. Email may already be in use.")
+                return render(request, 'monitoring/drivers/create.html')
+
+            # Create driver data with auth_uid and Django user id
             driver_data = {
                 'name': name,
+                'email': email,
                 'contact': contact or '',
                 'license_number': license_number or '',
                 'is_active': True,
+                'auth_uid': auth_uid,  # Link to Firebase Auth
+                'django_user_id': user.id,  # Link to Django User
             }
 
             # Create driver in Firebase
             driver_id = firebase_service.create_driver(driver_data)
 
             if driver_id:
-                messages.success(request, f"Driver '{name}' created successfully")
+                messages.success(request, f"Driver '{name}' created successfully. Can now login with email: {email}")
                 return redirect('driver_list')
             else:
-                messages.error(request, "Failed to create driver")
+                # Delete user and log error if driver creation fails
+                user.delete()
+                messages.error(request, "Failed to create driver record in database")
         except Exception as e:
             logger.error(f"Error creating driver: {e}")
             messages.error(request, f"Error creating driver: {str(e)}")
 
     return render(request, 'monitoring/drivers/create.html')
 
+@login_required(login_url='login')
 def driver_detail(request, driver_id):
     """View driver details"""
     try:
@@ -290,6 +365,7 @@ def driver_detail(request, driver_id):
         messages.error(request, "Error loading driver details")
         return redirect('driver_list')
 
+@login_required(login_url='login')
 def driver_edit(request, driver_id):
     """Edit driver"""
     try:
@@ -333,6 +409,7 @@ def driver_edit(request, driver_id):
         messages.error(request, "Error editing driver")
         return redirect('driver_list')
 
+@login_required(login_url='login')
 def driver_delete(request, driver_id):
     """Delete driver"""
     if request.method == 'POST':
@@ -353,12 +430,47 @@ def driver_delete(request, driver_id):
     return redirect('driver_list')
 
 # Trip Management Views
+@login_required(login_url='login')
 def trip_list(request):
     """List all trips with filtering"""
     try:
         # Get filter parameters
         status_filter = request.GET.get('status', 'all')
         driver_filter = request.GET.get('driver', '')
+        # New: allow searching by driver name (partial match). This parameter
+        # is used by the frontend keyup search. If provided, we'll resolve it
+        # to matching driver_ids or fall back to matching trip.driver_name.
+        driver_name_query = request.GET.get('driver_name', '').strip()
+
+        # Get the current user's driver record to auto-filter their trips
+        current_user = request.user
+        user_driver = None
+        auto_filter_driver = False
+        
+        # Try to find the driver associated with the current user
+        try:
+            drivers = firebase_service.get_all_drivers()
+            for driver in drivers:
+                # Normalize driver identifier for matching
+                normalized_id = driver.get('driver_id') or driver.get('id') or driver.get('auth_uid') or (driver.get('email') or '').lower()
+                # Ensure the driver record we keep has a normalized driver_id field
+                driver['driver_id'] = normalized_id
+
+                # Match by django_user_id or email
+                driver_email = driver.get('email', '').lower()
+                user_email = current_user.email.lower()
+                django_id = driver.get('django_user_id')
+
+                if django_id == current_user.id or driver_email == user_email:
+                    user_driver = driver
+                    auto_filter_driver = True
+                    # Auto-set driver filter if user is a driver and no filter is specified
+                    if not driver_filter:
+                        driver_filter = normalized_id
+                        logger.info(f"Auto-filtering trips for driver {current_user.username} (ID: {normalized_id})")
+                    break
+        except Exception as e:
+            logger.warning(f"Could not find driver for user {current_user.id}: {e}")
 
         # Get trips based on filter
         if status_filter == 'active':
@@ -370,19 +482,68 @@ def trip_list(request):
         else:
             trips = firebase_service.get_all_trips()
 
-        # Filter by driver if specified
-        if driver_filter:
-            trips = [trip for trip in trips if trip.get('driver_id') == driver_filter]
+        # Filter by driver if specified (mandatory for drivers viewing their own trips)
+        # Prepare driver_name based filtering: build a set of matching driver ids
+        driver_name_ids = set()
+        if driver_name_query:
+            try:
+                all_drivers = firebase_service.get_all_drivers()
+                for d in all_drivers:
+                    name = (d.get('name') or '').lower()
+                    normalized_id = d.get('driver_id') or d.get('id') or d.get('auth_uid') or (d.get('email') or '').lower()
+                    if driver_name_query.lower() in name and normalized_id:
+                        driver_name_ids.add(normalized_id)
+            except Exception:
+                logger.debug('Could not resolve driver_name to ids')
+
+        if driver_filter or driver_name_ids:
+            # Use flexible matching to avoid missing trips due to case differences
+            # or slightly different identifier fields between drivers and trips.
+            df = str(driver_filter).strip().lower() if driver_filter else ''
+
+            def driver_matches(trip):
+                # Check several possible fields that may contain driver identifiers
+                for key in ('driver_id', 'driver', 'driver_name', 'assigned_driver'):
+                    val = trip.get(key)
+                    if not val:
+                        continue
+                    sval = str(val).strip().lower()
+                    # If we have explicit driver filter (id), match against it
+                    if df:
+                        if sval == df:
+                            return True
+                        if df in sval or sval in df:
+                            return True
+
+                    # If name-based ids were found, match driver_id against them
+                    if trip.get('driver_id') and str(trip.get('driver_id')) in driver_name_ids:
+                        return True
+
+                    # As fallback, if driver_name_query is present, try matching trip.driver_name
+                    if driver_name_query:
+                        if driver_name_query.lower() in sval:
+                            return True
+
+                return False
+
+            trips = [trip for trip in trips if driver_matches(trip)]
 
         # Get all drivers and terminals for filter dropdown and name resolution
         drivers = firebase_service.get_all_drivers()
+
+        # Normalize driver IDs so template and server-side filtering use a consistent identifier.
+        # Some driver records may have 'driver_id' (created by this app), others may only have 'id',
+        # or might use 'auth_uid' or email. Normalize to a single `driver_id` value.
+        for driver in drivers:
+            normalized = driver.get('driver_id') or driver.get('id') or driver.get('auth_uid') or (driver.get('email') or '').lower()
+            driver['driver_id'] = normalized
         terminals = firebase_service.get_all_terminals()
 
         # Create mappings for quick lookup
         terminal_map = {terminal.get('terminal_id', terminal.get('id')): terminal.get('name', 'Unknown Terminal')
                        for terminal in terminals}
-        driver_map = {driver.get('driver_id', driver.get('id')): driver.get('name', 'Unknown Driver')
-                     for driver in drivers}
+        driver_map = {driver.get('driver_id'): driver.get('name', 'Unknown Driver')
+                 for driver in drivers}
 
         # Resolve terminal and driver names in trips
         for trip in trips:
@@ -395,6 +556,21 @@ def trip_list(request):
             trip['destination_terminal_name'] = terminal_map.get(destination_terminal_id, destination_terminal_id or 'Unknown')
             trip['driver_name'] = driver_map.get(driver_id, driver_id or 'Unknown')
 
+        # Ensure dropdown includes any driver identifiers referenced by trips
+        # (handles legacy/alias IDs like 'DRV001' that don't have driver docs).
+        try:
+            all_trips_for_ids = firebase_service.get_all_trips()
+            unique_trip_driver_ids = {t.get('driver_id') for t in all_trips_for_ids if t.get('driver_id')}
+            for tid in unique_trip_driver_ids:
+                if tid and tid not in driver_map:
+                    # Add a placeholder driver entry so the dropdown can select this id
+                    placeholder = {'driver_id': tid, 'name': f'Unknown Driver ({tid})'}
+                    drivers.append(placeholder)
+                    driver_map[tid] = placeholder['name']
+        except Exception:
+            # If Firestore can't be queried here, skip adding placeholders
+            logger.debug('Could not load all trips to reconcile missing driver ids')
+
         # Pagination
         paginator = Paginator(trips, 15)
         page_number = request.GET.get('page')
@@ -406,6 +582,8 @@ def trip_list(request):
             'drivers': drivers,
             'status_filter': status_filter,
             'driver_filter': driver_filter,
+            'is_driver': auto_filter_driver,
+            'user_driver': user_driver,
         }
 
         # Return partial template for HTMX requests
@@ -418,6 +596,7 @@ def trip_list(request):
         messages.error(request, "Error loading trips")
         return render(request, 'monitoring/trips/list.html', {'trips': [], 'drivers': []})
 
+@login_required(login_url='login')
 def trip_detail(request, trip_id):
     """View trip details"""
     try:
@@ -444,6 +623,7 @@ def trip_detail(request, trip_id):
         messages.error(request, "Error loading trip details")
         return redirect('trip_list')
 
+@login_required(login_url='login')
 def trip_create(request):
     """Create a new trip (for testing purposes)"""
     if request.method == 'POST':
@@ -493,6 +673,7 @@ def trip_create(request):
         logger.error(f"Error loading form data: {e}")
         return render(request, 'monitoring/trips/create.html', {'drivers': [], 'terminals': []})
 
+@login_required(login_url='login')
 def trip_update_status(request, trip_id):
     """Update trip status (HTMX endpoint)"""
     if request.method == 'POST':

@@ -14,8 +14,20 @@
 <div class="mb-8">
     <div class="sm:flex sm:items-center sm:justify-between">
         <div>
-            <h2 class="text-3xl font-bold text-gray-900">Trip Monitoring</h2>
-            <p class="mt-2 text-lg text-gray-600">Real-time tracking of fleet trips and activities</p>
+            <h2 class="text-3xl font-bold text-gray-900">
+                {% if is_driver %}
+                    My Trips
+                {% else %}
+                    Trip Monitoring
+                {% endif %}
+            </h2>
+            <p class="mt-2 text-lg text-gray-600">
+                {% if is_driver %}
+                    View and manage your assigned trips
+                {% else %}
+                    Real-time tracking of fleet trips and activities
+                {% endif %}
+            </p>
         </div>
         <div class="mt-4 sm:mt-0 flex space-x-3">
             <button class="inline-flex items-center px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
@@ -39,7 +51,7 @@
 <div class="mb-6 bg-white rounded-xl shadow-lg p-6">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
         <!-- Filters -->
-        <div class="flex flex-wrap items-center space-x-4">
+        <form id="filterForm" method="get" class="flex flex-wrap items-center space-x-4">
             <div class="flex items-center space-x-2">
                 <label class="text-sm font-medium text-gray-700">Status:</label>
                 <select id="statusFilter"
@@ -52,11 +64,12 @@
                 </select>
             </div>
 
+            {% if not is_driver %}
             <div class="flex items-center space-x-2">
                 <label class="text-sm font-medium text-gray-700">Driver:</label>
                 <select id="driverFilter"
                         class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-                        name="driver">
+                    name="driver">
                     <option value="">All Drivers</option>
                     {% for driver in drivers %}
                         <option value="{{ driver.driver_id }}" {% if driver_filter == driver.driver_id %}selected{% endif %}>
@@ -64,8 +77,25 @@
                         </option>
                     {% endfor %}
                 </select>
+                <!-- Quick name search fallback: type to search by driver name (server-side) -->
+                <input id="driverSearch" name="driver_name" type="text" placeholder="Type name to search" class="ml-2 border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+                <button id="applyFilterBtn" type="submit"
+                        class="inline-flex items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                    </svg>
+                    Search
+                </button>
             </div>
-        </div>
+            {% else %}
+            <div class="flex items-center space-x-2">
+                <span class="text-sm font-medium text-gray-700">Driver:</span>
+                <span class="inline-flex items-center px-3 py-2 text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-blue-700 rounded-lg">
+                    {{ user_driver.name }}
+                </span>
+            </div>
+            {% endif %}
+        </form>
 
         <!-- Real-time status indicator -->
         <div class="flex items-center space-x-4">
@@ -167,7 +197,23 @@
 // Firebase Configuration and Real-time Trip Monitoring
 let firebaseConfig = null;
 let db = null;
-let allTripsData = [];
+// Seed initial trips from server-side context so the page shows server-filtered results
+let allTripsData = [
+    {% for trip in trips %}
+    {
+        id: '{{ trip.id }}',
+        trip_id: '{{ trip.trip_id|default:trip.id }}',
+        driver_id: '{{ trip.driver_id|default:"" }}',
+        status: '{{ trip.status|default:"" }}',
+        passengers: {{ trip.passengers|default:0 }},
+        start_terminal: '{{ trip.start_terminal|default:"" }}',
+        destination_terminal: '{{ trip.destination_terminal|default:"" }}',
+        start_terminal_name: '{{ trip.start_terminal_name|escapejs }}',
+        destination_terminal_name: '{{ trip.destination_terminal_name|escapejs }}',
+        driver_name: '{{ trip.driver_name|escapejs }}',
+    },
+    {% endfor %}
+];
 let terminalsData = [];
 let driversData = [];
 let terminalMap = {};
@@ -176,6 +222,17 @@ let driverMap = {};
 // Current filter state
 let currentStatusFilter = '{{ status_filter }}';
 let currentDriverFilter = '{{ driver_filter }}';
+const isDriver = {{ is_driver|lower }};
+const userDriverName = '{{ user_driver.name|default:"" }}';
+
+console.log('🔧 Page Configuration:');
+console.log(`   Status Filter: '${currentStatusFilter}'`);
+console.log(`   Driver Filter: '${currentDriverFilter}' (type: ${typeof currentDriverFilter})`);
+console.log(`   Is Driver: ${isDriver}`);
+console.log(`   User Driver Name: '${userDriverName}'`);
+console.log('');
+console.log('📌 NOTE: Server-side filter applied first.')
+console.log('   Then Firebase may load additional/all trips for real-time updates.');
 
 // Status indicator elements
 const realtimeIndicator = document.getElementById('realtime-indicator');
@@ -383,14 +440,44 @@ function generateTripCardHTML(trip) {
 // Check if trip matches current filters
 function tripMatchesFilters(trip) {
     // Status filter
-    if (currentStatusFilter !== 'all') {
+    if (currentStatusFilter !== 'all' && currentStatusFilter !== '') {
         if (currentStatusFilter === 'active' && trip.status !== 'in_progress') return false;
         if (currentStatusFilter === 'completed' && trip.status !== 'completed') return false;
         if (currentStatusFilter === 'cancelled' && trip.status !== 'cancelled') return false;
     }
 
-    // Driver filter
-    if (currentDriverFilter && trip.driver_id !== currentDriverFilter) return false;
+    // Driver filter - flexible matching across multiple possible trip fields
+    if (currentDriverFilter && currentDriverFilter.trim() !== '') {
+        const filterDriverId = String(currentDriverFilter).trim();
+        const filterLower = filterDriverId.toLowerCase();
+
+        // Possible fields in trip documents that may contain driver identifiers
+        const candidateKeys = ['driver_id', 'driver', 'driver_name', 'assigned_driver'];
+
+        // Build an array of candidate values to compare
+        const candidates = candidateKeys.map(k => String(trip[k] || '').trim()).filter(v => v !== '');
+
+        // No candidate available -> does not match
+        if (candidates.length === 0) return false;
+
+        // Try to find a match among candidates
+        let matches = candidates.some(val => {
+            const v = String(val).trim();
+            if (v === filterDriverId) return true; // exact
+            if (v.toLowerCase() === filterLower) return true; // case-insensitive
+            if (v.toLowerCase().includes(filterLower) || filterLower.includes(v.toLowerCase())) return true; // substring
+            return false;
+        });
+
+        // Debug logging for first comparisons
+        if (window.tripFilterDebug === undefined) window.tripFilterDebug = 0;
+        if (window.tripFilterDebug < 5) {
+            console.log(`   Trip candidates: ${candidates.join('|')} vs Filter: '${filterDriverId}' = ${matches}`);
+            window.tripFilterDebug++;
+        }
+
+        if (!matches) return false;
+    }
 
     return true;
 }
@@ -400,8 +487,40 @@ function updateTripListDisplay() {
     const container = document.getElementById('trip-list-container');
     if (!container) return;
 
+    // Reset debug counter for next filter
+    window.tripFilterDebug = 0;
+    
+    // Log what we're filtering with
+    console.log(\`🔍 FILTERING WITH:\`);
+    console.log(\`   currentDriverFilter: '\${currentDriverFilter}'\`);
+    console.log(\`   currentStatusFilter: '\${currentStatusFilter}'\`);
+    console.log(\`   allTripsData.length: \${allTripsData.length}\`);
+    
+    // Log detailed driver information
+    const uniqueDriverIds = [...new Set(allTripsData.map(t => t.driver_id).filter(id => id))];
+    const allDriverIds = allTripsData.map(t => t.driver_id);
+    
+    console.log(\`   Unique driver IDs in data: \${uniqueDriverIds.length > 0 ? uniqueDriverIds.join(', ') : 'NONE'}\`);
+    console.log(\`   Sample trip data:
+\`, allTripsData.slice(0, 2).map(t => ({
+        driver_id: t.driver_id,
+        status: t.status,
+        trip_id: t.trip_id
+    })));
+
     // Filter trips based on current filters
     const filteredTrips = allTripsData.filter(trip => tripMatchesFilters(trip));
+    
+    console.log(\`\n📊 FILTER RESULT:\`);
+    console.log(\`   Total trips: \${allTripsData.length}, Filtered trips: \${filteredTrips.length}\`);
+    console.log(\`   Status filter: '\${currentStatusFilter}', Driver filter: '\${currentDriverFilter}'\`);
+    
+    if (currentDriverFilter && filteredTrips.length === 0) {
+        console.warn(\`⚠️ NO TRIPS FOUND for driver '\${currentDriverFilter}'\`);
+        console.warn(\`   Available driver_ids in data:`, uniqueDriverIds);
+        console.warn(\`   Filter value type: \${typeof currentDriverFilter}, value: '\${currentDriverFilter}'\`);
+        console.warn(\`   Make sure trip driver_id exactly matches the selected driver_id\`);
+    }
 
     if (filteredTrips.length === 0) {
         container.innerHTML = \`
@@ -442,13 +561,35 @@ function updateTripListDisplay() {
 
 // Update filters without HTTP requests
 function updateFilters() {
-    currentStatusFilter = document.getElementById('statusFilter').value;
-    currentDriverFilter = document.getElementById('driverFilter').value;
+    const statusSelect = document.getElementById('statusFilter');
+    const driverSelect = document.getElementById('driverFilter');
+    
+    if (statusSelect) {
+        currentStatusFilter = statusSelect.value;
+    }
+    if (driverSelect) {
+        const previousDriverFilter = currentDriverFilter;
+        currentDriverFilter = driverSelect.value;
+        
+        // Log the driver filter change details
+        if (previousDriverFilter !== currentDriverFilter) {
+            console.log(\`👤 Driver filter changed: '\${previousDriverFilter}' → '\${currentDriverFilter}'\`);
+        }
+    }
+
+    console.log(\`🔍 Filters updated: status=\${currentStatusFilter}, driver=\${currentDriverFilter}\`);
+    console.log(\`📊 Filtering \${allTripsData.length} total trips...\`);
+    
+    // Show available driver IDs if filter is empty
+    if (!currentDriverFilter) {
+        const uniqueDriverIds = [...new Set(allTripsData.map(t => t.driver_id).filter(id => id))];
+        if (uniqueDriverIds.length > 0) {
+            console.log(\`   Available drivers: \${uniqueDriverIds.join(', ')}\`);
+        }
+    }
 
     // Update display immediately
     updateTripListDisplay();
-
-    console.log(\`🔍 Filters updated: status=\${currentStatusFilter}, driver=\${currentDriverFilter}\`);
 }
 
 // Setup real-time listeners
@@ -471,6 +612,17 @@ function setupRealtimeListeners() {
             trip_id: doc.data().trip_id || doc.id,
             ...doc.data()
         }));
+
+        console.log(\`📥 Loaded \${allTripsData.length} trips from Firebase\`);
+        
+        // Log unique driver IDs for debugging
+        const uniqueDriverIds = [...new Set(allTripsData.map(t => t.driver_id).filter(id => id))];
+        console.log(\`   Unique drivers in trips: \${uniqueDriverIds.join(', ')}\`);
+        console.log(\`   Sample driver_id: '\${allTripsData[0]?.driver_id}'\`);
+        
+        if (currentDriverFilter) {
+            console.log(\`   🎯 Filtering for driver: '\${currentDriverFilter}'\`);
+        }
 
         // Resolve terminal and driver names
         allTripsData.forEach(trip => {
@@ -573,20 +725,89 @@ function showNotification(title, message, type = 'info') {
     }, 5000);
 }
 
+// Filter by driver when clicking driver name in trip card
+function filterByDriver(driverId) {
+    console.log(`🎯 Filtering by driver from trip card: ${driverId}`);
+    
+    const driverSelect = document.getElementById('driverFilter');
+    if (driverSelect) {
+        driverSelect.value = driverId;
+        currentDriverFilter = driverId;
+        
+        console.log(`👤 Driver filter set to: '${driverId}' from trip card click`);
+        
+        // Apply filter immediately
+        updateFilters();
+        
+        // Scroll to show filters
+        window.scrollTo({top: 0, behavior: 'smooth'});
+    } else {
+        console.warn('Driver filter dropdown not found');
+    }
+}
+
 // Update filter state when filters change
 document.addEventListener('DOMContentLoaded', function() {
     const statusFilter = document.getElementById('statusFilter');
     const driverFilter = document.getElementById('driverFilter');
+    const applyFilterBtn = document.getElementById('applyFilterBtn');
 
+    // Ensure filter dropdowns have the correct values from page load
     if (statusFilter) {
+        statusFilter.value = currentStatusFilter;
         statusFilter.addEventListener('change', updateFilters);
+        console.log('✅ Status filter listener attached');
     }
 
     if (driverFilter) {
-        driverFilter.addEventListener('change', updateFilters);
+        driverFilter.value = currentDriverFilter;
+        console.log(\`✅ Driver filter set to: '\${driverFilter.value}'\`);
+        
+        driverFilter.addEventListener('change', function() {
+            console.log('🎯 Driver selection changed to:', this.value);
+            // Auto-apply filter immediately without waiting for search button
+            updateFilters();
+        });
+        console.log('✅ Driver filter listener attached (auto-applies on change)');
     }
 
-    console.log('🚀 Trip monitoring page loaded with pure Firebase updates (no HTTP polling)');
+    // Driver name search (keyup -> server-side fetch)
+    const driverSearch = document.getElementById('driverSearch');
+    if (driverSearch) {
+        let searchTimer = null;
+        driverSearch.addEventListener('keyup', function(e) {
+            const q = this.value.trim();
+            clearTimeout(searchTimer);
+            // Only search when at least 2 chars
+            if (q.length < 2) return;
+            searchTimer = setTimeout(() => {
+                console.log('🔎 Performing server-side driver name search for:', q);
+                const status = (document.getElementById('statusFilter') || {}).value || '';
+                const params = new URLSearchParams();
+                if (status) params.set('status', status);
+                params.set('driver_name', q);
+                params.set('page', '1');
+
+                fetch(window.location.pathname + '?' + params.toString(), {
+                    headers: {'HX-Request': 'true'}
+                })
+                .then(resp => resp.text())
+                .then(html => {
+                    const container = document.getElementById('trip-list-container');
+                    if (container) container.innerHTML = html;
+                    console.log('🔎 Search results loaded');
+                })
+                .catch(err => console.error('Driver search error', err));
+            }, 300);
+        });
+        console.log('✅ Driver name search handler attached');
+    }
+
+    // Search button uses form submit now; no JS click handler needed.
+
+    console.log('🚀 Trip monitoring page loaded');
+    console.log(\`   Initial filters: status='\${currentStatusFilter}', driver='\${currentDriverFilter}'\`);
+    console.log('   Waiting for Firebase connection...');
 });
 </script>
 {% endblock %}

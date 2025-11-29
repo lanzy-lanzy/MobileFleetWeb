@@ -6,6 +6,9 @@ from django.urls import path
 from . import api_views
 
 urlpatterns = [
+    # Authentication
+    path('login/', api_views.mobile_login, name='api_mobile_login'),
+    
     # QR Code Scanning
     path('scan-qr/', api_views.scan_qr_code, name='api_scan_qr'),
     

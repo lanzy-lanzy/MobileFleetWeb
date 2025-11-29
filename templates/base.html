@@ -14,9 +14,6 @@
     <!-- Alpine.js -->
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 
-    <!-- Heroicons for better icons -->
-    <script src="https://unpkg.com/@heroicons/react@2.0.18/24/outline/index.js" type="module"></script>
-
     <!-- Custom CSS -->
     <style>
         [x-cloak] { display: none !important; }
@@ -141,19 +138,21 @@
         </nav>
 
         <!-- User Profile Section -->
+        {% if user.is_authenticated %}
         <div class="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200">
             <div class="flex items-center">
                 <div class="flex-shrink-0">
                     <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
-                        <span class="text-white text-sm font-medium">A</span>
+                        <span class="text-white text-sm font-medium">{{ user.first_name|first|upper|default:user.username|first|upper }}</span>
                     </div>
                 </div>
                 <div class="ml-3">
-                    <p class="text-sm font-medium text-gray-700">Admin User</p>
-                    <p class="text-xs text-gray-500">Fleet Manager</p>
+                    <p class="text-sm font-medium text-gray-700">{{ user.first_name|default:user.username }}</p>
+                    <p class="text-xs text-gray-500">{% if user.is_superuser %}Administrator{% else %}Fleet Manager{% endif %}</p>
                 </div>
             </div>
         </div>
+        {% endif %}
     </div>
 
         <!-- Mobile Sidebar Overlay -->
@@ -207,9 +206,14 @@
                              x-transition:leave-start="transform opacity-100 scale-100"
                              x-transition:leave-end="transform opacity-0 scale-95"
                              x-cloak>
-                            <a href="#" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Profile</a>
-                            <a href="#" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Settings</a>
-                            <a href="#" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Sign out</a>
+                            {% if user.is_authenticated %}
+                                <a href="#" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Profile</a>
+                                <a href="#" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Settings</a>
+                                <hr class="my-1">
+                                <a href="{% url 'logout' %}" class="block px-4 py-2 text-sm text-red-700 hover:bg-red-50">Sign out</a>
+                            {% else %}
+                                <a href="{% url 'login' %}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Sign in</a>
+                            {% endif %}
                         </div>
                     </div>
                 </div>

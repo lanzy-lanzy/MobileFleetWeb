@@ -1,5 +1,5 @@
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, auth
 from django.conf import settings
 from datetime import datetime
 import logging
@@ -37,6 +37,24 @@ class FirebaseService:
         if self._db is None:
             self._initialize_firebase()
         return self._db
+
+    # Authentication Management
+    def create_auth_user(self, email, password, display_name=None):
+        """Create a Firebase Auth user"""
+        try:
+            user = auth.create_user(
+                email=email,
+                password=password,
+                display_name=display_name
+            )
+            logger.info(f"Firebase Auth user created: {user.uid} ({email})")
+            return user.uid
+        except auth.EmailAlreadyExistsError:
+            logger.error(f"Email already exists: {email}")
+            return None
+        except Exception as e:
+            logger.error(f"Error creating auth user {email}: {e}")
+            return None
 
     # Terminal Management
     def create_terminal(self, terminal_data):

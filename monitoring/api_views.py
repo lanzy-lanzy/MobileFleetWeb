@@ -11,9 +11,69 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils.decorators import method_decorator
 from django.views import View
+from django.contrib.auth import authenticate
 from .firebase_service import firebase_service
 
 logger = logging.getLogger(__name__)
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def mobile_login(request):
+    """
+    Mobile app login endpoint
+    Authenticates user and returns driver information
+    """
+    try:
+        data = json.loads(request.body)
+        email = data.get('email')
+        password = data.get('password')
+        
+        if not email or not password:
+            return JsonResponse({
+                'error': 'Email and password are required'
+            }, status=400)
+        
+        # Authenticate using email (username in Django)
+        user = authenticate(request, username=email, password=password)
+        
+        if user is None:
+            return JsonResponse({
+                'error': 'Invalid email or password'
+            }, status=401)
+        
+        # Find driver linked to this user email
+        drivers = firebase_service.get_all_drivers()
+        driver = None
+        
+        for d in drivers:
+            if d.get('email') == email:
+                driver = d
+                break
+        
+        if not driver:
+            return JsonResponse({
+                'error': 'No authenticated driver found',
+                'user_authenticated': True,
+                'message': 'User account exists but no driver profile found. Please contact administrator.'
+            }, status=404)
+        
+        return JsonResponse({
+            'success': True,
+            'driver': driver,
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'first_name': user.first_name
+            },
+            'message': 'Login successful'
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        logger.error(f"Error during mobile login: {e}")
+        return JsonResponse({'error': 'Internal server error'}, status=500)
 
 @csrf_exempt
 @require_http_methods(["POST"])

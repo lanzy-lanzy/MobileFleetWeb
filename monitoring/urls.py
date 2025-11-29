@@ -2,6 +2,10 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    # Authentication
+    path('login/', views.login_view, name='login'),
+    path('logout/', views.logout_view, name='logout'),
+    
     # Dashboard
     path('', views.home, name='home'),
     path('firebase-config/', views.firebase_config, name='firebase_config'),
